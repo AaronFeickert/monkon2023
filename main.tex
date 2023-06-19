@@ -1,0 +1,272 @@
+\documentclass[aspectratio=169]{beamer}
+
+\usepackage{amsmath}
+\usepackage{amssymb}
+\newcommand{\com}{\mathsf{Com}}
+
+\setbeamertemplate{footline}[frame number]
+\beamertemplatenavigationsymbolsempty
+
+\title{Spats: User-defined Confidential Assets and Tokens}
+\author{Aaron Feickert, Ph.D.}
+\date{Monero Konferenco \\ 23 June 2023}
+
+\begin{document}
+
+\frame{\titlepage}
+
+\begin{frame}{Acknowledgments and disclaimer}
+	Spats is joint work with \textbf{Aram Jivanyan} of Firo and Yerevan State University. \\~\\
+
+	The author is head of research at \textbf{Cypher Stack}, and research for Spats was conducted for \textbf{Firo}. \\~\\
+
+	The material in this presentation is for informational use only, has not undergone formal external review, and does not constitute professional advice of any kind.
+\end{frame}
+
+\begin{frame}{Overview}
+	Protocols like \textbf{Spark} and \textbf{Seraphis} and \textbf{RingCT} already do neat tricks. They can:
+	\begin{itemize}
+		\item Dissociate recipient addresses from generated coin data
+		\item Provide ambiguity about generated coin spend status
+		\item Protect coin values and other metadata \\~\\
+	\end{itemize}
+
+	But they only support a \textbf{single asset type}. \\~\\
+
+	We want to support:
+	\begin{itemize}
+		\item Multiple asset types that have independent supply
+		\item Protection of asset types and values in transactions
+		\item Non-fungible tokens whose identifiers are protected
+	\end{itemize}
+\end{frame}
+
+\begin{frame}{Commitments}
+	How do we represent value in a safe way? \\~\\
+
+	A coin with value $v$ can be represented in part by a \textbf{commitment} that both hides and binds the value by including a random mask $m$. \\~\\
+
+	We can write this using Pedersen commitments as $C = \com(v, m) = mG + vH$, where $G$ and $H$ are fixed group elements. \\~\\
+
+	It's not possible to look at $C$ and extract the value or mask. \\~\\
+
+	We can show that a transaction balances in zero knowledge using commitment sums and differences via a Schnorr proof without revealing values or masks.
+\end{frame}
+
+\begin{frame}{Multiple assets}
+	But suppose we want to support \textbf{multiple asset types} with independent supply in a safe way. \\~\\
+
+	Some asset types might be \textbf{fungible}, where \underline{coins} are divisible with no particular differentiation. \\~\\
+
+	Others might be \textbf{non-fungible}, where \underline{tokens} have identifiers and must be differentiated. \\~\\
+
+	In all cases, transactions should be as uniform as possible, and protect data and metadata until or unless the user chooses to reveal it.
+\end{frame}
+
+\begin{frame}{Spats}
+	\textbf{Spats} is a protocol intended as an extension to confidential transaction protocols like Spark, Seraphis, or RingCT to meet these goals. \\~\\
+
+	The basic idea is to extend value commitments to include additional data: an \textbf{asset type} $a$ and an \textbf{identifier} $\iota$.
+	This is easy with Pedersen commitments. \\~\\
+
+	All assets, whether fungible or non-fungible, have a unique asset type. \\~\\
+
+	Fungible assets don't use identifiers, but each token of a non-fungible type has a unique identifier within its type.
+\end{frame}
+
+\begin{frame}{Commitments}
+	Previously, a value commitment looked pretty simple:
+	$$\com(v, m)$$
+
+	Now, it looks a little different, with the form $\com(a, \iota, v, m)$:
+
+	\begin{center}
+		\setlength{\tabcolsep}{20pt}
+		\renewcommand{\arraystretch}{1.5}
+		\begin{tabular}{cc}
+			\textbf{Fungible} & \textbf{Non-fungible} \\
+			$\com(a, 0, v, m)$ & $\com(a, \iota, 1, m)$
+		\end{tabular}
+	\end{center}
+
+	Fungible asset types always set the identifier $\iota = 0$ (more on this later). \\~\\
+
+	Non-fungible asset types always set the value $v = 1$ for atomicity.
+\end{frame}
+
+\begin{frame}{Minting}
+	Right now, a minted coin of value $v$ can include a Schnorr proof that its commitment is to the expected value, but without revealing the secret mask $m$.
+	This protects supply. \\~\\
+
+	With Spats, we simply extend this. \\~\\
+
+	A minted coin or token reveals its \textbf{type}, \textbf{identifier}, and \textbf{value} publicly.
+	This is important for ensuring supply is correct across types according to whatever consensus rules the protocol chooses. \\~\\
+
+	This still supports dissociating minted assets from recipient addresses.
+\end{frame}
+
+\begin{frame}{Transactions}
+	So how do transactions work? There's a Simple Rule: \\~\\
+
+	\textbf{All consumed and generated assets in a transaction must share the same asset type and identifier.} \\~\\
+
+	For fungible assets, a transaction might consume several coins of the same type, and generate several coins of the same type (including change).
+	Remember, $\iota = 0$ here! \\~\\
+
+	For non-fungible assets, the transaction will transfer only a single token; we can include zero-value dummy tokens for uniformity too.
+	Remember, $v = 1$ here!
+\end{frame}
+
+\begin{frame}{The catch: fees}
+	If you think about it for a while, there's a problem.
+
+	\begin{center}
+		\alert{How can you issue fees if the asset type is protected?}
+	\end{center}
+
+	The answer is that you can't, so Spats makes a shitty tradeoff by adding a second Simple Rule: \\~\\
+
+	\textbf{Transactions include a ``fee side'' that consumes and generates coins of a fixed base asset type.} \\~\\
+
+	This means a transaction really does two things:
+	\begin{itemize}
+		\item Issues fees in a fixed base asset type
+		\item Transfers coins or tokens of an arbitrary protected asset type
+	\end{itemize}
+\end{frame}
+
+\begin{frame}{The slightly gory details}
+	The two Simple Rules need to be enforced cryptographically.
+	We can do this by adding a few zero-knowledge proofs (ZKPs) into the mix. \\~\\
+
+	\textbf{The Fee-Side ZKPs:}
+	\begin{itemize}
+		\item All consumed and generated coins on the fee side have $a = \iota = 0$
+		\item The fee side balances
+	\end{itemize}
+
+	\textbf{The Asset-Side ZKPs:}
+	\begin{itemize}
+		\item All consumed and generated coins/tokens on the asset side have the same $a$ and $\iota$
+		\item The asset side balances \\~\\
+	\end{itemize}
+
+	This asserts that minimal information is leaked.
+	On the fee side, we need to know what asset is being used.
+	On the asset side, we must \textbf{not} know what asset is being used.
+\end{frame}
+
+\begin{frame}{The slightly more gory details}
+	Fortunately, we know how to build these zero-knowledge proofs! \\~\\
+
+	Each is a Schnorr-type proof, but with nice properties:
+	\begin{itemize}
+		\item Size is independent of the number of coins/tokens involved
+		\item Verification is efficient and can be batched
+		\item There are no icky trusted setups
+		\item Security proofs are straightforward \\~\\
+	\end{itemize}
+
+	They can be built using a power-of-challenge design. \\~\\
+
+	We also need to modify range proofs to support vector commitments, but this is easy to do with Bulletproofs and Bulletproofs+ with only minor changes.
+\end{frame}
+
+\begin{frame}{Efficiency}
+	Spats transactions require modifications to existing proofs, as well as new proofs.
+
+	\begin{center}
+		\setlength{\tabcolsep}{20pt}
+		\begin{tabular}{lr}
+			\textbf{Component} & \textbf{$\Delta$ (bytes)} \\
+			\hline
+			Range proof & 64 \\
+			Balance (asset) & 128 \\
+			Type (base) & 128 \\
+			Type (asset) & 256 \\
+			\hline
+			Total & 576
+		\end{tabular}
+	\end{center}
+
+	(The total does not include encrypted encodings of asset types and identifiers, which depend on protocol rules and transaction structure.) \\~\\
+
+	New proofs are speedy, adding minimal verification complexity.
+\end{frame}
+
+\begin{frame}{Migration}
+	Spats needs to play nicely with existing protocols like Spark or Seraphis or RingCT.
+	You shouldn't need to migrate assets from one pool to another, since this is risky. \\~\\
+
+	Fortunately, the design makes this a snap. \\~\\
+
+	Because base assets require $a = \iota = 0$, this means \textbf{all existing coins} are automatically Spats base asset coins!
+	That is, $\com(0, 0, v, m) = \com(v, m)$ holds between new and existing commitments. \\~\\
+
+	Further, because the two Simple Rules are enforced using ZKPs on coin commitments, there is always a \textbf{single pool} of assets available for transactions, regardless of asset type! \\~\\
+
+	This means that Spats supports clean migrations from existing protocols.
+\end{frame}
+
+\begin{frame}{Ownership proofs}
+	Support for non-fungible tokens implies something a bit unique: \textbf{ownership proofs}. \\~\\
+
+	It's likely that you'll need to prove ownership of a token, but this really involves showing several things:
+	\begin{itemize}
+		\item The token's commitment is to a given type $a$ and identifier $\iota$ (and value $v = 1$)
+		\item You know the secret data required to transfer the token
+		\item The proof isn't being replayed as a trick
+		\item The token has not already been transferred elsewhere \\~\\
+	\end{itemize}
+
+	The first two are straightforward using Schnorr-type proofs. \\~\\
+
+	The third is easy using Fiat-Shamir message binding.
+\end{frame}
+
+\begin{frame}{Ownership proofs}
+	Showing that a token hasn't been transferred is much trickier. \\~\\
+
+	One approach is to do the following:
+	\begin{itemize}
+		\item Reveal the \textbf{linking tag} associated to the token
+		\item Prove that the linking tag is correct
+		\item Assert that the linking tag does not appear in any subsequent transaction
+	\end{itemize}
+	
+	Unfortunately, this sucks.
+	Having the tag means the verifier can see if/when the token is later transferred, which is leaky. \\~\\
+
+	A better way is to prove the tag doesn't appear on chain without revealing it, which requires more clever proof techniques and is work in progress.
+\end{frame}
+
+\begin{frame}{The gist}
+	\textbf{Spats} is a new design for user-defined confidential assets and tokens with nice properties:
+	\begin{itemize}
+		\item Fungible and non-fungible asset types are supported
+		\item Transactions can be made uniform
+		\item Asset types, identifiers, and values are protected
+		\item Fees can be denominated in a fixed base type
+		\item Users can prove token ownership (in a leaky way)
+		\item Proving systems are straightforward
+		\item Migration is clean
+		\item All coins and tokens can share a single pool
+	\end{itemize}
+\end{frame}
+
+\begin{frame}{Questions?}
+	\Large
+	\begin{center}
+		\begin{tabular}{ll}
+			\textbf{Preprint} & \url{ia.cr/2022/288} \\
+			& \url{github.com/AaronFeickert/spats} \\
+			\\
+			\textbf{Slides} & \url{github.com/AaronFeickert/monkon2023} \\
+			\\
+			\textbf{Email} & \texttt{aaron@cypherstack.com}
+		\end{tabular}
+	\end{center}
+\end{frame}
+	
+\end{document}
